@@ -4,9 +4,9 @@ import functions.{Attempt, Index}
 import scala.quoted._
 import Function.const
 
-extension dsl {
-  def [A, Err, B] (a: A)?(using Attempt[A] { type To = B; type Error = Err }): B = ???
-  def [A, K, Err, B](a: A) idx (k: K)(using Index[A, K] { type To = B; type Error = Err }): B = ???
+extension [A, K, Err, B] (a: A) {
+  def ?(using Attempt[A] { type To = B; type Error = Err }): B = ???
+  def idx(k: K)(using Index[A, K] { type To = B; type Error = Err }): B = ???
 }
 
 object GenLens {
