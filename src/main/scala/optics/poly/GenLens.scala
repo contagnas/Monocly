@@ -11,9 +11,10 @@ extension [A, K, Err, B] (a: A) {
 
 object GenLens {
 
-  def impl[S: Type, T: Type](getter: Expr[S => T])(using qctx: QuoteContext): Expr[Lens[S, T]] = {
+  def impl[S: Type, T: Type](getter: Expr[S => T])(using qctx: Quotes): Expr[Lens[S, T]] = {
 
-    import qctx.tasty._
+    import qctx.reflect._
+//    import qctx.tasty._
     import util._
 
     object Function {
@@ -70,12 +71,20 @@ object GenLens {
       }._2.copy(value)
     }
 
-    getter.unseal match {
+    Term.of(getter) match {
       case Function(param :: Nil, body) =>
+        import qctx.reflect._
+        import qctx.wait
+        import qctx._
+        import scala.quoted._
+        import util._
+        def typeOf[T: scala.quoted.Type]: TypeRepr =
+          TypeRepr.of[T]
+          
         typeOf[S].classSymbol.map { cls =>
           '{
             val setter = (t: T) => (s: S) => ${
-              tree(cls, body)(('s).unseal, ('t).unseal).seal.cast[S]
+              tree(cls, body)(Term.of('s), Term.of('t)).asExprOf[S]
             }
             Lens.apply($getter, setter)
           }
@@ -101,9 +110,9 @@ object GenLens {
 
 object Focus {
 
-  def impl[S: Type, T](getter: Expr[S => T])(using qctx: QuoteContext, ttt: Type[T]) = {
+  def impl[S: Type, T](getter: Expr[S => T])(using qctx: Quotes, ttt: Type[T]) = {
 
-    import qctx.tasty._
+    import quotes.reflect._
     import util._
 
     object Function {
@@ -141,17 +150,17 @@ object Focus {
       }
     }
 
-    case class State(from: List[Type], to: List[Type])
+    case class State(from: List[TypeRepr], to: List[TypeRepr])
 
-    def genLens(from: Type, to: Type, term: Term): Term = {
-      (from.seal, to.seal) match {
-        case ('[$f], '[$t]) =>
-          '{ GenLens.uncurried(${term.seal.cast(using '[$f => $t])}) }.unseal
+    def genLens(from: TypeRepr, to: TypeRepr, term: Term): Term = {
+      (from.asType, to.asType) match {
+        case ('[f], '[t]) =>
+          Term.of('{ GenLens.uncurried(${term.asExpr.asExprOf[(f) => t]}) })
 
       }
     }
 
-    def selector(from: Type, to: Type, sel: List[String]): Term = {
+    def selector(from: TypeRepr, to: TypeRepr, sel: List[String]): Term = {
 
       def body(term: Term, sel: List[String]): Term = {
         sel match {
@@ -161,13 +170,13 @@ object Focus {
         }
       }
 
-      (from.seal, to.seal) match {
-        case ('[$f], '[$t]) =>
-          '{ (s : $f) => ${ body('s.unseal, sel).seal.cast(using t) } }.unseal
+      (from.asType, to.asType) match {
+        case ('[f], '[t]) =>
+          Term.of('{ (s : f) => ${ body(Term.of('s), sel).asExprOf[t] } })
       }
     }
 
-    def fieldType(sel: List[String], t: Type): Type =
+    def fieldType(sel: List[String], t: TypeRepr): TypeRepr =
       sel match {
         case Nil => t
         case x :: xs =>
@@ -176,13 +185,13 @@ object Focus {
       }
 
     //This is a little nasty, but sure beats having to compile by hand...
-    def compose[A, B](x: Term, y: Term)(using a: Type, b: Type): Term = {
-      (a.seal, b.seal) match {
-        case (l @ '[EOptional[$err1, $aa, $bb]], r @ '[EOptional[$err2, $cc, $dd]]) =>
-          '{ ${x.seal.cast(using l) } >>> ${ y.seal.cast(using '[EOptional[$err2, $bb, $dd]]) } }.unseal
+    def compose[A, B](x: Term, y: Term)(using a: TypeRepr, b: TypeRepr): Term = {
+      (a.asType, b.asType) match {
+        case (l @ '[EOptional[err1, aa, bb]], r @ '[EOptional[err2, cc, dd]]) =>
+          Term.of('{ ${x.asExprOf(using l) } >>> ${ y.asExprOf[EOptional[err2, bb, dd]] } })
         case (aa, bb) =>
-          scala.quoted.report.error(s"unable to compose ${aa.show} >>> ${bb.show}")
-          '{???}.unseal
+          scala.quoted.report.error(s"unable to compose a >>> b")
+          Term.of('{???})
       }
 
     }
@@ -195,9 +204,9 @@ object Focus {
         case ident @ Ident(_) =>
           state match {
             case State(from :: Nil, _) =>
-              from.seal match {
-                case '[$a] =>
-                    (state, ' { Iso.id[$a] }.unseal)
+              from.asType match {
+                case '[a] =>
+                    (state, Term.of('{ Iso.id[a] }))
               }
           }
         case Path(sel, Ident(_)) =>
@@ -217,15 +226,15 @@ object Focus {
         case Operator1(Ident("idx"), _ :: key :: err :: to :: Nil, witness, arg, rhs) =>
           fold(rhs)(state) match {
             case (State(from :: _, _), term) =>
-              (err.tpe.seal, from.seal, to.tpe.seal) match {
-                case ('[$e], '[$a], '[$b]) =>
+              (err.tpe.asType, from.asType, to.tpe.asType) match {
+                case ('[e], '[a], '[b]) =>
                   val lens = compose(
                     term,
                     Apply(
                       Select.unique(witness, "index"),
                       List(arg)
                     )
-                  )(using term.tpe, '[EOptional[$e, $a, $b]].unseal.tpe)
+                  )(using term.tpe, TypeRepr.of[EOptional[e, a, b]])
                   (
                     state.copy(from = to.tpe :: state.from),
                     lens
@@ -236,13 +245,13 @@ object Focus {
         case Operator0(Ident("?"), _ :: err :: to :: Nil, witness, rhs) =>
           fold(rhs)(state) match {
             case (State(from :: _, _), term) =>
-              (err.tpe.seal, from.seal, to.tpe.seal) match {
-                case ('[$e], '[$a], '[$b]) =>
+              (err.tpe.asType, from.asType, to.tpe.asType) match {
+                case ('[e], '[a], '[b]) =>
 
                   val lens = compose(
                     term,
                     Select.unique(witness, "attempt")
-                  )(using term.tpe, '[EOptional[$e, $a, $b]].unseal.tpe)
+                  )(using term.tpe, TypeRepr.of[EOptional[e, a, b]])
                   (
                     state.copy(from = to.tpe :: state.from),
                     lens
@@ -268,10 +277,10 @@ object Focus {
           }
       }
 
-    val (_, term) = fold(getter.unseal)(
-      State(List(typeOf[S]), List(typeOf[T]))
+    val (_, term) = fold(Term.of(getter))(
+      State(List(TypeRepr.of[S]), List(TypeRepr.of[T]))
     )
-    term.seal
+    term.asExpr
   }
 
 
