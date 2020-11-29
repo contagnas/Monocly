@@ -3,6 +3,7 @@ package optics.poly
 import functions.{Attempt, Index}
 import scala.quoted._
 import Function.const
+import scala.quoted.Reporting
 
 extension dsl {
   def [A, Err, B] (a: A)?(using Attempt[A] { type To = B; type Error = Err }): B = ???
@@ -33,7 +34,7 @@ object GenLens {
         case Block(List(), Inlined(_, _, term)) =>
           fold(term)(a)(f)
         case _ =>
-          qctx.error(s"Unrecognized syntax in expression body.")
+          Reporting.error(s"Unrecognized syntax in expression body.")
           a
       }
 
@@ -62,7 +63,7 @@ object GenLens {
               )
             )
           }.getOrElse {
-            qctx.error(s"Unsupported syntax. Please make sure the field `${name}` is a case class")
+            Reporting.error(s"Unsupported syntax. Please make sure the field `${name}` is a case class")
             (symbol, build)
           }
         case (_, (cls, term)) =>
@@ -80,11 +81,11 @@ object GenLens {
             Lens.apply($getter, setter)
           }
         }.getOrElse {
-          qctx.error("Unsupported syntax. Please explicitly use a concrete class.")
+          Reporting.error("Unsupported syntax. Please explicitly use a concrete class.")
           '{???}
         }
       case err =>
-        qctx.error(s"Unsupported syntax. Example: `GenLens[Address](_.streetNumber)`, ${err.show}")
+        Reporting.error(s"Unsupported syntax. Example: `GenLens[Address](_.streetNumber)`, ${err.show}")
         '{???}
     }
   }
@@ -181,7 +182,7 @@ object Focus {
         case (l @ '[EOptional[$err1, $aa, $bb]], r @ '[EOptional[$err2, $cc, $dd]]) =>
           '{ ${x.seal.cast(using l) } >>> ${ y.seal.cast(using '[EOptional[$err2, $bb, $dd]]) } }.unseal
         case (aa, bb) =>
-          qctx.error(s"unable to compose ${aa.show} >>> ${bb.show}")
+          Reporting.error(s"unable to compose ${aa.show} >>> ${bb.show}")
           '{???}.unseal
       }
 
